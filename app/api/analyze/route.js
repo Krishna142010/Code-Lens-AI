@@ -96,45 +96,90 @@ export async function POST(request) {
         return Response.json({ error: 'No URL provided' }, { status: 400 });
       }
 
-      // Clean up the URL
-      let rawUrl = url.trim().split('?')[0].split('#')[0];
+      const cleanUrl = url.trim().split('?')[0].split('#')[0];
 
-      // Convert various GitHub URL formats to raw URLs
-      // Input:  https://github.com/user/repo/blob/main/src/file.js
-      // Output: https://raw.githubusercontent.com/user/repo/main/src/file.js
-      if (rawUrl.includes('github.com') && !rawUrl.includes('raw.githubusercontent.com')) {
-        rawUrl = rawUrl
-          .replace('https://github.com/', 'https://raw.githubusercontent.com/')
-          .replace('http://github.com/', 'https://raw.githubusercontent.com/')
-          .replace('/blob/', '/')
-          .replace('/tree/', '/');
-      }
+      // Parse GitHub URL to extract owner, repo, branch, and file path
+      // Supports:
+      //   https://github.com/owner/repo/blob/branch/path/to/file.js
+      //   https://github.com/owner/repo/tree/branch/path/to/file.js  
+      //   https://raw.githubusercontent.com/owner/repo/branch/path/to/file.js
+      let owner, repo, branch, filePath;
 
       try {
-        const response = await fetch(rawUrl, {
-          headers: {
-            'User-Agent': 'CodeLens-AI/1.0',
-            'Accept': 'text/plain, application/vnd.github.v3.raw',
-          },
-        });
-        if (!response.ok) {
+        const urlObj = new URL(cleanUrl);
+        const parts = urlObj.pathname.split('/').filter(Boolean);
+
+        if (urlObj.hostname === 'raw.githubusercontent.com') {
+          // Format: /owner/repo/branch/path/to/file
+          owner = parts[0];
+          repo = parts[1];
+          branch = parts[2];
+          filePath = parts.slice(3).join('/');
+        } else if (urlObj.hostname === 'github.com') {
+          // Format: /owner/repo/blob/branch/path/to/file
+          owner = parts[0];
+          repo = parts[1];
+          // parts[2] is 'blob' or 'tree' — skip it
+          branch = parts[3];
+          filePath = parts.slice(4).join('/');
+        } else {
           return Response.json(
-            { error: `GitHub returned status ${response.status}. Make sure: 1) The URL points to a single file (not a folder), 2) The repository is public, 3) The branch name is correct. URL tried: ${rawUrl}` },
+            { error: 'Please provide a GitHub URL (github.com or raw.githubusercontent.com).' },
             { status: 400 }
           );
         }
+
+        if (!owner || !repo || !filePath) {
+          return Response.json(
+            { error: 'Could not parse the URL. Make sure it points to a specific file, like: https://github.com/user/repo/blob/main/file.js' },
+            { status: 400 }
+          );
+        }
+      } catch (e) {
+        return Response.json({ error: 'Invalid URL format.' }, { status: 400 });
+      }
+
+      // Use GitHub Contents API — no API key needed for public repos
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}${branch ? `?ref=${branch}` : ''}`;
+
+      try {
+        const response = await fetch(apiUrl, {
+          headers: {
+            'User-Agent': 'CodeLens-AI/1.0',
+            'Accept': 'application/vnd.github.v3.raw',
+          },
+        });
+
+        if (response.status === 404) {
+          return Response.json(
+            { error: `File not found. Please check: 1) The repository "${owner}/${repo}" is public, 2) The file path "${filePath}" exists, 3) The branch "${branch || 'default'}" is correct.` },
+            { status: 400 }
+          );
+        }
+        if (response.status === 403) {
+          return Response.json(
+            { error: 'GitHub API rate limit reached (60 requests/hour for unauthenticated requests). Please try again later or paste the code directly.' },
+            { status: 429 }
+          );
+        }
+        if (!response.ok) {
+          return Response.json(
+            { error: `GitHub API returned status ${response.status}. Please try pasting the code directly.` },
+            { status: 400 }
+          );
+        }
+
         const code = await response.text();
         if (!code.trim()) {
           return Response.json({ error: 'The fetched file is empty.' }, { status: 400 });
         }
 
-        // Extract filename from URL
-        const filename = rawUrl.split('/').pop() || 'unknown';
+        const filename = filePath.split('/').pop() || 'unknown';
         const result = await analyzeOneFile(code, 'auto', filename);
         return Response.json(result);
       } catch (fetchError) {
         return Response.json(
-          { error: `Network error: ${fetchError.message}. Check the URL and make sure the repo is public.` },
+          { error: `Network error: ${fetchError.message}. Check your internet connection and try again.` },
           { status: 400 }
         );
       }
