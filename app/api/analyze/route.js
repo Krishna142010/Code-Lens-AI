@@ -96,21 +96,30 @@ export async function POST(request) {
         return Response.json({ error: 'No URL provided' }, { status: 400 });
       }
 
-      // Convert GitHub URLs to raw URLs
-      let rawUrl = url.trim();
+      // Clean up the URL
+      let rawUrl = url.trim().split('?')[0].split('#')[0];
+
+      // Convert various GitHub URL formats to raw URLs
+      // Input:  https://github.com/user/repo/blob/main/src/file.js
+      // Output: https://raw.githubusercontent.com/user/repo/main/src/file.js
       if (rawUrl.includes('github.com') && !rawUrl.includes('raw.githubusercontent.com')) {
         rawUrl = rawUrl
-          .replace('github.com', 'raw.githubusercontent.com')
-          .replace('/blob/', '/');
+          .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+          .replace('http://github.com/', 'https://raw.githubusercontent.com/')
+          .replace('/blob/', '/')
+          .replace('/tree/', '/');
       }
 
       try {
         const response = await fetch(rawUrl, {
-          headers: { 'Accept': 'text/plain' },
+          headers: {
+            'User-Agent': 'CodeLens-AI/1.0',
+            'Accept': 'text/plain, application/vnd.github.v3.raw',
+          },
         });
         if (!response.ok) {
           return Response.json(
-            { error: `Failed to fetch from GitHub (${response.status}). Make sure the URL points to a valid file and the repository is public.` },
+            { error: `GitHub returned status ${response.status}. Make sure: 1) The URL points to a single file (not a folder), 2) The repository is public, 3) The branch name is correct. URL tried: ${rawUrl}` },
             { status: 400 }
           );
         }
@@ -125,7 +134,7 @@ export async function POST(request) {
         return Response.json(result);
       } catch (fetchError) {
         return Response.json(
-          { error: 'Could not fetch from GitHub. Check the URL and make sure the repo is public.' },
+          { error: `Network error: ${fetchError.message}. Check the URL and make sure the repo is public.` },
           { status: 400 }
         );
       }
