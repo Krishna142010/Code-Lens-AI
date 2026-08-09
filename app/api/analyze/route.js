@@ -98,11 +98,6 @@ export async function POST(request) {
 
       const cleanUrl = url.trim().split('?')[0].split('#')[0];
 
-      // Parse GitHub URL to extract owner, repo, branch, and file path
-      // Supports:
-      //   https://github.com/owner/repo/blob/branch/path/to/file.js
-      //   https://github.com/owner/repo/tree/branch/path/to/file.js  
-      //   https://raw.githubusercontent.com/owner/repo/branch/path/to/file.js
       let owner, repo, branch, filePath;
 
       try {
@@ -110,16 +105,13 @@ export async function POST(request) {
         const parts = urlObj.pathname.split('/').filter(Boolean);
 
         if (urlObj.hostname === 'raw.githubusercontent.com') {
-          // Format: /owner/repo/branch/path/to/file
           owner = parts[0];
           repo = parts[1];
           branch = parts[2];
           filePath = parts.slice(3).join('/');
         } else if (urlObj.hostname === 'github.com') {
-          // Format: /owner/repo/blob/branch/path/to/file
           owner = parts[0];
           repo = parts[1];
-          // parts[2] is 'blob' or 'tree' — skip it
           branch = parts[3];
           filePath = parts.slice(4).join('/');
         } else {
@@ -139,16 +131,20 @@ export async function POST(request) {
         return Response.json({ error: 'Invalid URL format.' }, { status: 400 });
       }
 
-      // Use GitHub Contents API — no API key needed for public repos
       const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}${branch ? `?ref=${branch}` : ''}`;
 
       try {
-        const response = await fetch(apiUrl, {
-          headers: {
-            'User-Agent': 'CodeLens-AI/1.0',
-            'Accept': 'application/vnd.github.v3.raw',
-          },
-        });
+        // Construct headers dynamically to attach GITHUB_TOKEN if available
+        const headers = {
+          'User-Agent': 'CodeLens-AI/1.0',
+          'Accept': 'application/vnd.github.v3.raw',
+        };
+
+        if (process.env.GITHUB_TOKEN) {
+          headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+        }
+
+        const response = await fetch(apiUrl, { headers });
 
         if (response.status === 404) {
           return Response.json(
@@ -158,7 +154,7 @@ export async function POST(request) {
         }
         if (response.status === 403) {
           return Response.json(
-            { error: 'GitHub API rate limit reached (60 requests/hour for unauthenticated requests). Please try again later or paste the code directly.' },
+            { error: 'GitHub API rate limit reached. Please verify your GITHUB_TOKEN or try again later.' },
             { status: 429 }
           );
         }
