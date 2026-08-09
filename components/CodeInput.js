@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function CodeInput() {
-  const [mode, setMode] = useState('text');
+  const [mode, setMode] = useState('paste');
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('auto');
   const [loading, setLoading] = useState(false);
+  const [files, setFiles] = useState([]);
+  const [githubUrl, setGithubUrl] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
   const router = useRouter();
 
   const languages = [
@@ -36,101 +40,215 @@ export default function CodeInput() {
     { value: 'yaml', label: 'YAML/JSON' },
   ];
 
-  const handleAnalyze = async () => {
-    if (!code) return;
-    setLoading(true);
-    
-    try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ code, language }),
+  const handleFileUpload = (selectedFiles) => {
+    const fileArray = Array.from(selectedFiles);
+    const readPromises = fileArray.map(file => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          resolve({ name: file.name, content: e.target.result, size: file.size });
+        };
+        reader.readAsText(file);
       });
-      
-      const data = await response.json();
-      sessionStorage.setItem('codelens_results', JSON.stringify(data));
-      router.push('/results');
-    } catch (error) {
-      console.error('Analysis failed:', error);
-      setLoading(false);
+    });
+    Promise.all(readPromises).then(results => {
+      setFiles(prev => [...prev, ...results]);
+    });
+  };
+
+  const removeFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      handleFileUpload(e.dataTransfer.files);
     }
   };
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setCode(e.target.result);
-        setMode('text');
-      };
-      reader.readAsText(file);
+  const handleAnalyze = async () => {
+    setLoading(true);
+    try {
+      let payload;
+
+      if (mode === 'paste') {
+        if (!code.trim()) return setLoading(false);
+        payload = { mode: 'single', code, language, filename: null };
+      } else if (mode === 'upload') {
+        if (files.length === 0) return setLoading(false);
+        payload = {
+          mode: 'multi',
+          files: files.map(f => ({ code: f.content, filename: f.name, language: 'auto' })),
+        };
+      } else if (mode === 'github') {
+        if (!githubUrl.trim()) return setLoading(false);
+        payload = { mode: 'github', url: githubUrl.trim() };
+      }
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        sessionStorage.setItem('codelens_results', JSON.stringify(data));
+        router.push('/results');
+      } else {
+        alert(data.error || 'Analysis failed. Please try again.');
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      alert('Analysis failed. Please check your input and try again.');
+      setLoading(false);
     }
   };
 
   return (
     <div className="code-input-section">
       <div className="input-tabs">
-        <button 
-          className={`input-tab ${mode === 'text' ? 'active' : ''}`}
-          onClick={() => setMode('text')}
+        <button
+          className={`input-tab ${mode === 'paste' ? 'active' : ''}`}
+          onClick={() => setMode('paste')}
         >
           Paste Code
         </button>
-        <button 
+        <button
           className={`input-tab ${mode === 'upload' ? 'active' : ''}`}
           onClick={() => setMode('upload')}
         >
-          Upload File
+          Upload Files
+        </button>
+        <button
+          className={`input-tab ${mode === 'github' ? 'active' : ''}`}
+          onClick={() => setMode('github')}
+        >
+          GitHub URL
         </button>
       </div>
 
       <div className="code-input-card">
-        {mode === 'text' ? (
+        {/* === PASTE CODE === */}
+        {mode === 'paste' && (
           <>
             <div className="language-select-row">
               <span className="language-select-label">Language:</span>
-              <select 
+              <select
                 className="language-select"
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
               >
                 {languages.map((lang) => (
-                  <option key={lang.value} value={lang.value}>
-                    {lang.label}
-                  </option>
+                  <option key={lang.value} value={lang.value}>{lang.label}</option>
                 ))}
               </select>
             </div>
             <textarea
               className="code-textarea"
-              placeholder="Paste your code here to analyze..."
+              placeholder={`Paste your code here to analyze...\n\nExample:\nfunction greet(name) {\n  eval(name); // security issue\n  var x = 1; // should use let/const\n  if (x == '1') { } // should use ===\n}`}
               value={code}
               onChange={(e) => setCode(e.target.value)}
+              spellCheck={false}
             />
           </>
-        ) : (
-          <label className="drop-zone">
-            <span className="drop-zone-icon">📁</span>
-            <span className="drop-zone-text">Click or drag file to upload</span>
-            <span className="drop-zone-hint">Supports all major text files</span>
-            <input 
-              type="file" 
-              style={{ display: 'none' }} 
-              onChange={handleFileUpload}
-            />
-          </label>
         )}
 
+        {/* === UPLOAD FILES (MULTIPLE) === */}
+        {mode === 'upload' && (
+          <>
+            <div
+              className={`drop-zone ${dragOver ? 'drag-over' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                multiple
+                onChange={(e) => handleFileUpload(e.target.files)}
+              />
+              <span className="drop-zone-icon">📁</span>
+              <span className="drop-zone-text">Click or drag files to upload</span>
+              <span className="drop-zone-hint">Upload multiple files at once — supports all languages</span>
+            </div>
+
+            {files.length > 0 && (
+              <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  {files.length} file{files.length !== 1 ? 's' : ''} loaded:
+                </div>
+                {files.map((file, i) => (
+                  <div key={i} className="drop-zone-file">
+                    <span style={{ flex: 1 }}>{file.name}</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                      {file.content.split('\n').length} lines
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeFile(i); }}
+                      style={{
+                        background: 'rgba(239,68,68,0.15)',
+                        color: 'var(--error)',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '2px 8px',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem'
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* === GITHUB URL === */}
+        {mode === 'github' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Paste a GitHub raw file URL to analyze its code:
+            </div>
+            <input
+              type="url"
+              className="code-textarea"
+              style={{ minHeight: '56px', height: '56px', fontFamily: 'var(--font-code)' }}
+              placeholder="https://raw.githubusercontent.com/user/repo/main/file.js"
+              value={githubUrl}
+              onChange={(e) => setGithubUrl(e.target.value)}
+            />
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              <strong>Tip:</strong> Go to any file on GitHub, click the <strong>Raw</strong> button, then copy that URL.
+              <br />Example: https://raw.githubusercontent.com/user/repo/main/index.js
+            </div>
+          </div>
+        )}
+
+        {/* === ANALYZE BUTTON === */}
         <div className="analyze-btn-row">
-          <button 
-            className="btn btn-primary btn-lg" 
+          <button
+            className="btn btn-primary btn-lg"
             onClick={handleAnalyze}
-            disabled={!code || loading}
+            disabled={
+              loading ||
+              (mode === 'paste' && !code.trim()) ||
+              (mode === 'upload' && files.length === 0) ||
+              (mode === 'github' && !githubUrl.trim())
+            }
           >
-            {loading ? <span className="loading-spinner"></span> : 'Analyze Code 🚀'}
+            {loading ? (
+              <><span className="loading-spinner" style={{ width: 20, height: 20 }}></span> Analyzing...</>
+            ) : (
+              'Analyze Code 🚀'
+            )}
           </button>
         </div>
       </div>
