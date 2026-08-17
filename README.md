@@ -1,6 +1,5 @@
 # CodeLens AI
 
-> **Universal Code Analyzer for 20+ Programming Languages** — Built for [Iris Hacks IV](https://iris-hacks-iv.devpost.com/)
 
 ## 🚀 What It Does
 
