@@ -68,18 +68,8 @@ npm run dev
 2. Go to [vercel.com](https://vercel.com) and import your repo
 3. Click "Deploy" — that's it! Zero configuration needed.
 
-## 📸 Screenshots
-
-*[Add screenshots of the landing page, analysis results, and score dashboard]*
-
-## 🏆 Built For
-
-**Iris Hacks IV** — A 2-day virtual hackathon introducing students to the world of AI and coding.
 
 ## 📄 License
 
 MIT License — Free to use, modify, and distribute.
 
----
-
-*Made with ❤️ for Iris Hacks IV*
